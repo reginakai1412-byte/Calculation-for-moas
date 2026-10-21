@@ -6,809 +6,624 @@ import plotly.express as px
 from io import BytesIO
 from scipy import stats
 
-# ==================================================
-# 1. KONFIGURASI APLIKASI
-# ==================================================
 
-st.set_page_config(
-    page_title="Calculator for MOAs",
-    page_icon="💚",
-    layout="wide"
-)
-
-st.title("💚 Calculator for MOAs")
-st.caption("Turn Data Into Dream")
-st.write(
-    "Aplikasi pengolahan data statistik untuk membantu "
-    "pengguna memahami, menganalisis, dan memvisualisasikan data."
-)
-
-st.divider()
-
-# ==================================================
-# 2. FUNGSI BANTU
-# ==================================================
+# ==========================================
+# HELPER FUNCTIONS
+# ==========================================
 
 def make_excel(dataframes):
-    """Membuat file Excel dari beberapa tabel hasil analisis."""
+    """Menggabungkan beberapa tabel ke dalam satu file Excel."""
     output = BytesIO()
 
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for sheet_name, dataframe in dataframes.items():
-            dataframe.to_excel(
-                writer,
-                sheet_name=sheet_name[:31],
-                index=False
-            )
+            if dataframe is not None and not dataframe.empty:
+                dataframe.to_excel(
+                    writer,
+                    sheet_name=sheet_name[:31],
+                    index=False
+                )
 
     output.seek(0)
     return output.getvalue()
 
 
 def get_numeric_data(df):
-    """Mengambil kolom numerik dan mengubah nilai tak hingga menjadi NaN."""
-    numeric = df.select_dtypes(include=np.number).copy()
-    numeric = numeric.replace([np.inf, -np.inf], np.nan)
-    return numeric
+    """Mengambil kolom numerik dan membersihkan nilai tidak valid."""
+    numeric_df = df.select_dtypes(include=np.number).copy()
+
+    numeric_df = numeric_df.replace(
+        [np.inf, -np.inf],
+        np.nan
+    )
+
+    return numeric_df
 
 
-def calculate_statistics(data, ddof):
-    """Menghitung statistik deskriptif untuk satu variabel."""
-    data = pd.to_numeric(data, errors="coerce")
-    data = data.replace([np.inf, -np.inf], np.nan).dropna()
+def calculate_statistics(data, ddof=1):
+    """Menghitung statistik deskriptif."""
+    data = pd.to_numeric(
+        pd.Series(data),
+        errors="coerce"
+    ).replace([np.inf, -np.inf], np.nan).dropna()
 
     if data.empty:
-        return None
+        return {}
 
-    mode_values = data.mode()
-
-    variance = data.var(ddof=ddof) if len(data) > ddof else np.nan
-    std_dev = data.std(ddof=ddof) if len(data) > ddof else np.nan
+    variance = data.var(ddof=ddof)
+    std_dev = data.std(ddof=ddof)
 
     return {
         "Jumlah Data": len(data),
         "Mean": data.mean(),
         "Median": data.median(),
-        "Modus": ", ".join(map(str, mode_values.tolist())),
+        "Modus": data.mode().tolist(),
         "Minimum": data.min(),
         "Maksimum": data.max(),
         "Rentang": data.max() - data.min(),
-        "Kuartil 1": data.quantile(0.25),
-        "Kuartil 2": data.quantile(0.50),
-        "Kuartil 3": data.quantile(0.75),
         "Varians": variance,
         "Standar Deviasi": std_dev,
-        "Skewness": data.skew() if len(data) >= 3 else np.nan,
-        "Kurtosis": data.kurt() if len(data) >= 4 else np.nan
+        "Q1": data.quantile(0.25),
+        "Q2": data.quantile(0.50),
+        "Q3": data.quantile(0.75),
     }
 
 
-# ==================================================
-# 3. UPLOAD DATASET
-# ==================================================
+# ==========================================
+# MAIN APP
+# ==========================================
 
-st.header("📂 Upload Dataset")
+def run_app():
 
-uploaded_file = st.file_uploader(
-    "Unggah dataset dalam format CSV atau Excel",
-    type=["csv", "xlsx"]
-)
-
-if uploaded_file is None:
-    st.info(
-        "Silakan unggah file CSV atau Excel untuk mulai "
-        "menggunakan fitur analisis statistik."
+    st.title("📊 MOA Statistics")
+    st.caption("Turn Data Into Dream 💚")
+    st.write(
+        "Aplikasi pengolahan data statistik untuk membantu "
+        "menganalisis dataset secara praktis."
     )
 
-    st.markdown(
-        """
-        ### ✨ Fitur Calculator for MOAs
+    st.divider()
 
-        - 📊 Statistik deskriptif
-        - 📈 Histogram dan boxplot
-        - 🔗 Analisis korelasi
-        - 📉 Regresi linear sederhana
-        - 🔎 Pemeriksaan data kosong
-        - 📥 Unduh hasil analisis
-        """
+    # ======================================
+    # UPLOAD DATASET
+    # ======================================
+
+    st.subheader("📂 Upload Dataset")
+
+    uploaded_file = st.file_uploader(
+        "Unggah file CSV atau Excel",
+        type=["csv", "xlsx"],
+        key="statistics_upload"
     )
 
-    st.stop()
+    if uploaded_file is None:
+        st.info(
+            "Unggah dataset CSV atau Excel untuk mulai "
+            "melakukan analisis statistik."
+        )
+        return
 
+    # ======================================
+    # READ DATA
+    # ======================================
 
-# ==================================================
-# 4. MEMBACA DATASET
-# ==================================================
+    try:
+        if uploaded_file.name.lower().endswith(".csv"):
+            try:
+                df = pd.read_csv(uploaded_file)
+            except UnicodeDecodeError:
+                uploaded_file.seek(0)
+                df = pd.read_csv(
+                    uploaded_file,
+                    encoding="latin-1"
+                )
 
-try:
-    if uploaded_file.name.lower().endswith(".csv"):
-        try:
-            df = pd.read_csv(uploaded_file)
-        except UnicodeDecodeError:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding="latin-1")
-    else:
-        df = pd.read_excel(uploaded_file)
+        else:
+            df = pd.read_excel(uploaded_file)
 
-    if df.empty or len(df.columns) == 0:
-        st.error("Dataset kosong atau tidak memiliki kolom.")
-        st.stop()
+    except Exception as e:
+        st.error(f"Dataset gagal dibaca: {e}")
+        return
 
-except Exception as e:
-    st.error(f"Dataset gagal dibaca: {e}")
-    st.stop()
+    if df.empty:
+        st.warning("Dataset kosong. Silakan unggah dataset lain.")
+        return
 
+    # ======================================
+    # DATA PREVIEW
+    # ======================================
 
-# ==================================================
-# 5. DASHBOARD DATASET
-# ==================================================
+    st.success("Dataset berhasil dibaca!")
 
-st.success("Dataset berhasil dibaca!")
+    st.subheader("👀 Preview Dataset")
 
-st.header("📌 Dashboard Dataset")
+    col1, col2, col3 = st.columns(3)
 
-row_count = len(df)
-column_count = len(df.columns)
-missing_count = int(df.isna().sum().sum())
-duplicate_count = int(df.duplicated().sum())
+    col1.metric("Jumlah Baris", df.shape[0])
+    col2.metric("Jumlah Kolom", df.shape[1])
+    col3.metric("Total Sel", df.size)
 
-col1, col2, col3, col4 = st.columns(4)
+    st.dataframe(
+        df,
+        use_container_width=True
+    )
 
-col1.metric("Jumlah Baris", f"{row_count:,}")
-col2.metric("Jumlah Kolom", f"{column_count:,}")
-col3.metric("Data Kosong", f"{missing_count:,}")
-col4.metric("Baris Duplikat", f"{duplicate_count:,}")
+    # ======================================
+    # DATA QUALITY
+    # ======================================
 
-with st.expander("👀 Preview Dataset", expanded=True):
-    st.dataframe(df, use_container_width=True)
+    st.divider()
+    st.subheader("🔎 Pemeriksaan Kualitas Data")
 
-with st.expander("ℹ️ Informasi Tipe Data"):
-    information = pd.DataFrame({
-        "Kolom": df.columns.astype(str),
-        "Tipe Data": df.dtypes.astype(str).values,
-        "Jumlah Data Terisi": df.notna().sum().values,
-        "Jumlah Data Kosong": df.isna().sum().values
+    missing_values = df.isnull().sum()
+
+    missing_table = pd.DataFrame({
+        "Kolom": missing_values.index,
+        "Jumlah Data Kosong": missing_values.values
     })
 
-    st.dataframe(information, use_container_width=True)
-
-
-# ==================================================
-# 6. PEMERIKSAAN DATA KOSONG
-# ==================================================
-
-st.divider()
-st.header("🔎 Pemeriksaan Kualitas Data")
-
-missing_table = pd.DataFrame({
-    "Kolom": df.columns.astype(str),
-    "Jumlah Data Kosong": df.isna().sum().values,
-    "Persentase Data Kosong (%)": (
-        df.isna().mean().values * 100
+    missing_table["Persentase Data Kosong (%)"] = (
+        missing_table["Jumlah Data Kosong"]
+        / len(df) * 100
     ).round(2)
-})
 
-st.dataframe(missing_table, use_container_width=True)
+    duplicate_count = int(df.duplicated().sum())
 
-if missing_count == 0:
-    st.success("Tidak ditemukan data kosong.")
-else:
-    st.warning(
-        f"Ditemukan {missing_count:,} sel kosong. "
-        "Periksa kembali sebelum melakukan analisis."
+    col1, col2 = st.columns(2)
+
+    col1.metric(
+        "Total Data Kosong",
+        int(df.isnull().sum().sum())
     )
 
-if duplicate_count > 0:
-    st.info(
-        f"Ditemukan {duplicate_count:,} baris duplikat. "
-        "Baris tersebut tidak dihapus secara otomatis."
+    col2.metric(
+        "Baris Duplikat",
+        duplicate_count
     )
 
+    st.write("**Rincian Data Kosong per Kolom**")
 
-# ==================================================
-# 7. PERSIAPAN DATA NUMERIK
-# ==================================================
-
-numeric_df = get_numeric_data(df)
-numeric_columns = numeric_df.columns.tolist()
-
-if not numeric_columns:
-    st.warning(
-        "Dataset ini tidak memiliki kolom numerik "
-        "yang dapat digunakan untuk analisis statistik."
+    st.dataframe(
+        missing_table,
+        use_container_width=True
     )
 
-    st.stop()
+    # ======================================
+    # NUMERIC DATA
+    # ======================================
 
+    numeric_df = get_numeric_data(df)
 
-# ==================================================
-# 8. PILIHAN METODE PERHITUNGAN
-# ==================================================
+    st.divider()
+    st.subheader("📊 Analisis Statistik Deskriptif")
 
-st.divider()
-st.header("⚙️ Pengaturan Analisis")
+    if numeric_df.empty:
+        st.warning(
+            "Dataset tidak memiliki kolom numerik yang "
+            "bisa dianalisis."
+        )
+        return
 
-variance_type = st.radio(
-    "Pilih jenis perhitungan varians dan standar deviasi",
-    ["Sampel", "Populasi"],
-    horizontal=True
-)
-
-ddof = 1 if variance_type == "Sampel" else 0
-
-st.caption(
-    "Sampel menggunakan pembagi n − 1, sedangkan "
-    "populasi menggunakan pembagi n."
-)
-
-
-# ==================================================
-# 9. STATISTIK DESKRIPTIF
-# ==================================================
-
-st.divider()
-st.header("📊 Statistik Deskriptif")
-
-selected_column = st.selectbox(
-    "Pilih variabel yang akan dianalisis",
-    numeric_columns,
-    key="descriptive_column"
-)
-
-selected_data = numeric_df[selected_column].dropna()
-
-if not selected_data.empty:
-
-    statistics_result = calculate_statistics(
-        selected_data,
-        ddof
+    st.write(
+        "Pilih apakah perhitungan varians dan standar deviasi "
+        "menggunakan rumus sampel atau populasi."
     )
 
-    if statistics_result is not None:
+    calculation_type = st.radio(
+        "Jenis Perhitungan",
+        ["Sampel", "Populasi"],
+        horizontal=True,
+        key="statistics_calculation_type"
+    )
 
-        col1, col2, col3, col4 = st.columns(4)
+    ddof = 1 if calculation_type == "Sampel" else 0
 
-        col1.metric(
-            "Jumlah Data",
-            f"{statistics_result['Jumlah Data']:,}"
+    # ======================================
+    # SINGLE VARIABLE STATISTICS
+    # ======================================
+
+    selected_column = st.selectbox(
+        "Pilih variabel numerik",
+        numeric_df.columns.tolist(),
+        key="statistics_selected_column"
+    )
+
+    data = numeric_df[selected_column].dropna()
+
+    if data.empty:
+        st.warning(
+            "Kolom yang dipilih tidak memiliki data numerik valid."
+        )
+        return
+
+    result = calculate_statistics(data, ddof)
+
+    st.markdown(f"### Hasil untuk variabel: `{selected_column}`")
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Jumlah Data",
+        result["Jumlah Data"]
+    )
+
+    col2.metric(
+        "Mean",
+        f"{result['Mean']:.4f}"
+    )
+
+    col3.metric(
+        "Median",
+        f"{result['Median']:.4f}"
+    )
+
+    col1, col2, col3 = st.columns(3)
+
+    col1.metric(
+        "Minimum",
+        f"{result['Minimum']:.4f}"
+    )
+
+    col2.metric(
+        "Maksimum",
+        f"{result['Maksimum']:.4f}"
+    )
+
+    col3.metric(
+        "Rentang",
+        f"{result['Rentang']:.4f}"
+    )
+
+    variance = result["Varians"]
+    std_dev = result["Standar Deviasi"]
+
+    col1, col2 = st.columns(2)
+
+    col1.metric(
+        f"Varians {calculation_type.lower()}",
+        f"{variance:.4f}" if pd.notna(variance)
+        else "Tidak tersedia"
+    )
+
+    col2.metric(
+        f"Standar deviasi {calculation_type.lower()}",
+        f"{std_dev:.4f}" if pd.notna(std_dev)
+        else "Tidak tersedia"
+    )
+
+    st.write("**Modus:**", result["Modus"])
+    st.write("**Kuartil:**")
+
+    quartile_table = pd.DataFrame({
+        "Kuartil": ["Q1 (25%)", "Q2 (50%)", "Q3 (75%)"],
+        "Nilai": [
+            result["Q1"],
+            result["Q2"],
+            result["Q3"]
+        ]
+    })
+
+    st.dataframe(
+        quartile_table,
+        use_container_width=True
+    )
+
+    # ======================================
+    # DESCRIPTIVE STATISTICS TABLE
+    # ======================================
+
+    descriptive_table = pd.DataFrame({
+        "Statistik": list(result.keys()),
+        "Nilai": [
+            ", ".join(map(str, value))
+            if isinstance(value, list)
+            else value
+            for value in result.values()
+        ]
+    })
+
+    st.subheader("📋 Tabel Statistik Deskriptif")
+
+    st.dataframe(
+        descriptive_table,
+        use_container_width=True
+    )
+
+    # ======================================
+    # HISTOGRAM
+    # ======================================
+
+    st.divider()
+    st.subheader("📈 Histogram")
+
+    fig_hist = px.histogram(
+        x=data,
+        nbins="auto",
+        title=f"Distribusi {selected_column}",
+        labels={"x": selected_column, "y": "Frekuensi"}
+    )
+
+    st.plotly_chart(
+        fig_hist,
+        use_container_width=True
+    )
+
+    # ======================================
+    # BOXPLOT
+    # ======================================
+
+    st.subheader("📦 Boxplot")
+
+    fig_box = px.box(
+        y=data,
+        title=f"Boxplot {selected_column}",
+        labels={"y": selected_column}
+    )
+
+    st.plotly_chart(
+        fig_box,
+        use_container_width=True
+    )
+
+    # ======================================
+    # MULTIPLE VARIABLE STATISTICS
+    # ======================================
+
+    st.divider()
+    st.subheader("📊 Statistik Beberapa Variabel")
+
+    multi_rows = []
+
+    for column in numeric_df.columns:
+        column_data = numeric_df[column].dropna()
+
+        if column_data.empty:
+            continue
+
+        column_result = calculate_statistics(
+            column_data,
+            ddof
         )
 
-        col2.metric(
-            "Mean",
-            f"{statistics_result['Mean']:.4f}"
-        )
-
-        col3.metric(
-            "Median",
-            f"{statistics_result['Median']:.4f}"
-        )
-
-        col4.metric(
-            "Standar Deviasi",
-            (
-                f"{statistics_result['Standar Deviasi']:.4f}"
-                if pd.notna(statistics_result["Standar Deviasi"])
-                else "Tidak tersedia"
-            )
-        )
-
-        st.subheader("Tabel Statistik Lengkap")
-
-        descriptive_table = pd.DataFrame({
-            "Statistik": statistics_result.keys(),
-            "Nilai": statistics_result.values()
+        multi_rows.append({
+            "Variabel": column,
+            "Jumlah Data": column_result["Jumlah Data"],
+            "Mean": column_result["Mean"],
+            "Median": column_result["Median"],
+            "Minimum": column_result["Minimum"],
+            "Maksimum": column_result["Maksimum"],
+            "Varians": column_result["Varians"],
+            "Standar Deviasi": column_result["Standar Deviasi"]
         })
 
+    multiple_statistics = pd.DataFrame(multi_rows)
+
+    st.dataframe(
+        multiple_statistics,
+        use_container_width=True
+    )
+
+    # ======================================
+    # CORRELATION
+    # ======================================
+
+    st.divider()
+    st.subheader("🔗 Analisis Korelasi")
+
+    correlation_df = numeric_df.dropna(axis=1, how="all")
+
+    if correlation_df.shape[1] >= 2:
+
+        correlation_method = st.selectbox(
+            "Pilih metode korelasi",
+            ["Pearson", "Spearman", "Kendall"],
+            key="statistics_correlation_method"
+        )
+
+        if correlation_method == "Pearson":
+            correlation_matrix = correlation_df.corr(
+                method="pearson"
+            )
+        elif correlation_method == "Spearman":
+            correlation_matrix = correlation_df.corr(
+                method="spearman"
+            )
+        else:
+            correlation_matrix = correlation_df.corr(
+                method="kendall"
+            )
+
+        st.write(
+            f"Matriks korelasi menggunakan metode "
+            f"**{correlation_method}**."
+        )
+
         st.dataframe(
-            descriptive_table,
+            correlation_matrix,
+            use_container_width=True
+        )
+
+        fig_corr = px.imshow(
+            correlation_matrix,
+            text_auto=".2f",
+            aspect="auto",
+            title=f"Matriks Korelasi {correlation_method}"
+        )
+
+        st.plotly_chart(
+            fig_corr,
             use_container_width=True
         )
 
         st.caption(
-            f"Modus: {statistics_result['Modus']}"
-            if statistics_result["Modus"]
-            else "Modus tidak tersedia."
+            "Korelasi menunjukkan hubungan antarvariabel, "
+            "tetapi tidak otomatis membuktikan sebab-akibat."
         )
 
-else:
-    st.warning("Kolom ini tidak memiliki data numerik yang valid.")
+    else:
+        st.info(
+            "Analisis korelasi memerlukan setidaknya "
+            "dua kolom numerik."
+        )
 
+    # ======================================
+    # SIMPLE LINEAR REGRESSION
+    # ======================================
 
-# ==================================================
-# 10. STATISTIK BEBERAPA VARIABEL
-# ==================================================
+    st.divider()
+    st.subheader("📉 Regresi Linear Sederhana")
 
-st.divider()
-st.header("📚 Analisis Beberapa Variabel")
+    if numeric_df.shape[1] >= 2:
 
-selected_columns = st.multiselect(
-    "Pilih satu atau beberapa variabel numerik",
-    numeric_columns,
-    default=numeric_columns
-)
+        regression_columns = numeric_df.columns.tolist()
 
-if selected_columns:
+        x_column = st.selectbox(
+            "Variabel bebas (X)",
+            regression_columns,
+            index=0,
+            key="statistics_regression_x"
+        )
 
-    all_statistics = []
-
-    for col in selected_columns:
-        result = calculate_statistics(numeric_df[col], ddof)
-
-        if result is not None:
-            result["Variabel"] = str(col)
-            all_statistics.append(result)
-
-    if all_statistics:
-        multiple_statistics = pd.DataFrame(all_statistics)
-
-        ordered_columns = ["Variabel"] + [
-            col for col in multiple_statistics.columns
-            if col != "Variabel"
+        y_options = [
+            column for column in regression_columns
+            if column != x_column
         ]
 
-        multiple_statistics = multiple_statistics[ordered_columns]
+        if y_options:
 
-        st.dataframe(
-            multiple_statistics,
-            use_container_width=True
-        )
-    else:
-        multiple_statistics = pd.DataFrame()
-        st.warning("Tidak ada data numerik valid untuk dianalisis.")
-
-else:
-    multiple_statistics = pd.DataFrame()
-    st.info("Pilih minimal satu variabel numerik.")
-
-
-# ==================================================
-# 11. VISUALISASI
-# ==================================================
-
-st.divider()
-st.header("📈 Visualisasi Data")
-
-chart_column = st.selectbox(
-    "Pilih variabel untuk visualisasi",
-    numeric_columns,
-    key="chart_column"
-)
-
-chart_data = numeric_df[chart_column].dropna()
-
-if not chart_data.empty:
-
-    chart_tab1, chart_tab2 = st.tabs(
-        ["Histogram", "Boxplot"]
-    )
-
-    with chart_tab1:
-
-        bins = st.slider(
-            "Jumlah kelompok histogram",
-            min_value=5,
-            max_value=50,
-            value=20
-        )
-
-        histogram = px.histogram(
-            x=chart_data,
-            nbins=bins,
-            title=f"Distribusi {chart_column}",
-            labels={"x": str(chart_column), "y": "Frekuensi"}
-        )
-
-        st.plotly_chart(
-            histogram,
-            use_container_width=True
-        )
-
-    with chart_tab2:
-
-        boxplot = px.box(
-            y=chart_data,
-            points="outliers",
-            title=f"Boxplot {chart_column}",
-            labels={"y": str(chart_column)}
-        )
-
-        st.plotly_chart(
-            boxplot,
-            use_container_width=True
-        )
-
-else:
-    st.warning("Tidak ada data valid untuk dibuatkan grafik.")
-
-
-# ==================================================
-# 12. ANALISIS KORELASI
-# ==================================================
-
-st.divider()
-st.header("🔗 Analisis Korelasi")
-
-st.write(
-    "Korelasi mengukur kekuatan dan arah hubungan "
-    "antara dua variabel numerik."
-)
-
-if len(numeric_columns) >= 2:
-
-    correlation_method = st.selectbox(
-        "Metode korelasi",
-        ["Pearson", "Spearman", "Kendall"]
-    )
-
-    if correlation_method == "Pearson":
-        corr_method = "pearson"
-    elif correlation_method == "Spearman":
-        corr_method = "spearman"
-    else:
-        corr_method = "kendall"
-
-    correlation_df = numeric_df[numeric_columns].corr(
-        method=corr_method
-    )
-
-    st.subheader("Matriks Korelasi")
-
-    correlation_fig = px.imshow(
-        correlation_df,
-        text_auto=".3f",
-        aspect="auto",
-        title=f"Matriks Korelasi {correlation_method}",
-        color_continuous_scale="RdBu",
-        zmin=-1,
-        zmax=1
-    )
-
-    st.plotly_chart(
-        correlation_fig,
-        use_container_width=True
-    )
-
-    st.subheader("Korelasi Dua Variabel")
-
-    corr_col1, corr_col2 = st.columns(2)
-
-    with corr_col1:
-        variable_x = st.selectbox(
-            "Variabel pertama",
-            numeric_columns,
-            key="corr_x"
-        )
-
-    with corr_col2:
-        variable_y = st.selectbox(
-            "Variabel kedua",
-            numeric_columns,
-            index=1,
-            key="corr_y"
-        )
-
-    if variable_x == variable_y:
-        st.info(
-            "Pilih dua variabel yang berbeda "
-            "untuk menganalisis hubungan keduanya."
-        )
-
-    else:
-        paired_data = numeric_df[
-            [variable_x, variable_y]
-        ].replace([np.inf, -np.inf], np.nan).dropna()
-
-        if len(paired_data) < 2:
-            st.warning(
-                "Diperlukan minimal dua pasangan data valid."
+            y_column = st.selectbox(
+                "Variabel terikat (Y)",
+                y_options,
+                key="statistics_regression_y"
             )
 
-        elif (
-            paired_data[variable_x].nunique() < 2
-            or paired_data[variable_y].nunique() < 2
-        ):
-            st.warning(
-                "Korelasi tidak dapat dihitung jika "
-                "salah satu variabel konstan."
-            )
+            regression_data = numeric_df[
+                [x_column, y_column]
+            ].dropna()
 
-        else:
-            if corr_method == "pearson":
-                coefficient, p_value = stats.pearsonr(
-                    paired_data[variable_x],
-                    paired_data[variable_y]
-                )
+            if len(regression_data) >= 2:
 
-            elif corr_method == "spearman":
-                coefficient, p_value = stats.spearmanr(
-                    paired_data[variable_x],
-                    paired_data[variable_y]
-                )
+                x = regression_data[x_column]
+                y = regression_data[y_column]
+
+                if x.nunique() >= 2:
+
+                    regression = stats.linregress(x, y)
+
+                    slope = regression.slope
+                    intercept = regression.intercept
+                    r_value = regression.rvalue
+                    p_value = regression.pvalue
+                    r_squared = r_value ** 2
+
+                    st.write(
+                        "**Persamaan regresi:** "
+                        f"Y = {slope:.4f}X "
+                        f"{intercept:+.4f}"
+                    )
+
+                    col1, col2, col3 = st.columns(3)
+
+                    col1.metric(
+                        "Slope",
+                        f"{slope:.4f}"
+                    )
+
+                    col2.metric(
+                        "Intercept",
+                        f"{intercept:.4f}"
+                    )
+
+                    col3.metric(
+                        "R²",
+                        f"{r_squared:.4f}"
+                    )
+
+                    st.write(
+                        f"**P-value:** {p_value:.6f}"
+                    )
+
+                    regression_plot = pd.DataFrame({
+                        x_column: x,
+                        y_column: y
+                    })
+
+                    fig_reg = px.scatter(
+                        regression_plot,
+                        x=x_column,
+                        y=y_column,
+                        title="Regresi Linear Sederhana",
+                        trendline="ols"
+                    )
+
+                    st.plotly_chart(
+                        fig_reg,
+                        use_container_width=True
+                    )
+
+                else:
+                    st.warning(
+                        "Variabel X harus memiliki setidaknya "
+                        "dua nilai berbeda."
+                    )
 
             else:
-                coefficient, p_value = stats.kendalltau(
-                    paired_data[variable_x],
-                    paired_data[variable_y]
+                st.warning(
+                    "Data valid terlalu sedikit untuk regresi."
                 )
 
-            col1, col2, col3 = st.columns(3)
-
-            col1.metric(
-                "Koefisien Korelasi",
-                f"{coefficient:.4f}"
-            )
-
-            col2.metric(
-                "P-value",
-                f"{p_value:.4g}"
-            )
-
-            col3.metric(
-                "Jumlah Pasangan Data",
-                f"{len(paired_data):,}"
-            )
-
-            st.caption(
-                "Korelasi menunjukkan hubungan statistik, "
-                "bukan bukti bahwa satu variabel menyebabkan "
-                "variabel lainnya."
-            )
-
-else:
-    correlation_df = pd.DataFrame()
-
-    st.info(
-        "Analisis korelasi memerlukan minimal "
-        "dua kolom numerik."
-    )
-
-
-# ==================================================
-# 13. REGRESI LINEAR SEDERHANA
-# ==================================================
-
-st.divider()
-st.header("📉 Regresi Linear Sederhana")
-
-st.write(
-    "Regresi linear sederhana memodelkan hubungan "
-    "antara satu variabel X dan satu variabel Y."
-)
-
-if len(numeric_columns) >= 2:
-
-    reg_col1, reg_col2 = st.columns(2)
-
-    with reg_col1:
-        regression_x = st.selectbox(
-            "Variabel bebas (X)",
-            numeric_columns,
-            key="regression_x"
-        )
-
-    with reg_col2:
-        regression_y = st.selectbox(
-            "Variabel terikat (Y)",
-            numeric_columns,
-            index=1,
-            key="regression_y"
-        )
-
-    if regression_x == regression_y:
-
-        st.warning(
-            "Variabel X dan Y harus berbeda."
-        )
-
     else:
+        st.info(
+            "Regresi memerlukan setidaknya dua kolom numerik."
+        )
 
-        regression_data = numeric_df[
-            [regression_x, regression_y]
-        ].replace([np.inf, -np.inf], np.nan).dropna()
+    # ======================================
+    # DOWNLOAD RESULTS
+    # ======================================
 
-        if len(regression_data) < 3:
+    st.divider()
+    st.subheader("⬇️ Download Hasil Analisis")
 
-            st.warning(
-                "Regresi linear memerlukan setidaknya "
-                "tiga pasangan data valid."
-            )
-
-        elif (
-            regression_data[regression_x].nunique() < 2
-            or regression_data[regression_y].nunique() < 2
-        ):
-
-            st.warning(
-                "Regresi tidak dapat dihitung karena "
-                "salah satu variabel tidak memiliki variasi."
-            )
-
-        else:
-
-            x_values = regression_data[regression_x].to_numpy()
-            y_values = regression_data[regression_y].to_numpy()
-
-            regression = stats.linregress(
-                x_values,
-                y_values
-            )
-
-            y_predicted = (
-                regression.intercept
-                + regression.slope * x_values
-            )
-
-            residual_sum = np.sum(
-                (y_values - y_predicted) ** 2
-            )
-
-            total_sum = np.sum(
-                (y_values - np.mean(y_values)) ** 2
-            )
-
-            r_squared = (
-                1 - residual_sum / total_sum
-                if total_sum > 0
-                else np.nan
-            )
-
-            col1, col2, col3 = st.columns(3)
-
-            col1.metric(
-                "Slope",
-                f"{regression.slope:.4f}"
-            )
-
-            col2.metric(
-                "Intercept",
-                f"{regression.intercept:.4f}"
-            )
-
-            col3.metric(
-                "R-squared",
-                f"{r_squared:.4f}"
-                if pd.notna(r_squared)
-                else "Tidak tersedia"
-            )
-
-            st.markdown("### Persamaan Regresi")
-
-            st.latex(
-                rf"\hat{{Y}} = "
-                rf"{regression.intercept:.4f} "
-                rf"+ ({regression.slope:.4f})X"
-            )
-
-            st.write(
-                f"**P-value slope:** {regression.pvalue:.4g}"
-            )
-
-            st.write(
-                f"**Jumlah pasangan data:** {len(regression_data):,}"
-            )
-
-            regression_plot_data = regression_data.copy()
-
-            regression_plot_data["Prediksi Y"] = y_predicted
-
-            regression_plot_data = regression_plot_data.sort_values(
-                by=regression_x
-            )
-
-            regression_fig = px.scatter(
-                regression_data,
-                x=regression_x,
-                y=regression_y,
-                title="Scatter Plot dan Garis Regresi",
-                labels={
-                    regression_x: str(regression_x),
-                    regression_y: str(regression_y)
-                }
-            )
-
-            regression_fig.add_scatter(
-                x=regression_plot_data[regression_x],
-                y=regression_plot_data["Prediksi Y"],
-                mode="lines",
-                name="Garis Regresi"
-            )
-
-            st.plotly_chart(
-                regression_fig,
-                use_container_width=True
-            )
-
-            st.caption(
-                "R-squared menunjukkan proporsi variasi Y "
-                "yang dijelaskan model linear pada data ini. "
-                "Hasil regresi tidak otomatis membuktikan "
-                "hubungan sebab-akibat."
-            )
-
-else:
-    st.info(
-        "Regresi linear memerlukan minimal "
-        "dua kolom numerik."
-    )
-
-
-# ==================================================
-# 14. DOWNLOAD HASIL ANALISIS
-# ==================================================
-
-st.divider()
-st.header("📥 Download Hasil Analisis")
-
-download_tables = {
-    "Data": df,
-    "Data_Kosong": missing_table,
-    "Info_Tipe_Data": information
-}
-
-if not descriptive_table.empty if "descriptive_table" in locals() else False:
-    download_tables["Statistik_Pilihan"] = descriptive_table
-
-if not multiple_statistics.empty:
-    download_tables["Statistik_Semua"] = multiple_statistics
-
-if "correlation_df" in locals() and not correlation_df.empty:
-    download_tables["Korelasi"] = (
-        correlation_df
-        .rename_axis("Variabel")
-        .reset_index()
-    )
-
-col1, col2 = st.columns(2)
-
-with col1:
-
-    csv_result = (
-        multiple_statistics.to_csv(index=False).encode("utf-8")
-        if not multiple_statistics.empty
-        else pd.DataFrame().to_csv(index=False).encode("utf-8")
-    )
+    csv_data = descriptive_table.to_csv(
+        index=False
+    ).encode("utf-8")
 
     st.download_button(
-        label="⬇️ Download Statistik (CSV)",
-        data=csv_result,
-        file_name="hasil_statistik_moa.csv",
-        mime="text/csv"
+        "Download Statistik Deskriptif (CSV)",
+        data=csv_data,
+        file_name="statistik_deskriptif.csv",
+        mime="text/csv",
+        key="statistics_download_csv"
     )
 
-with col2:
+    excel_tables = {
+        "Statistik Deskriptif": descriptive_table,
+        "Statistik Semua Variabel": multiple_statistics,
+        "Data Kosong": missing_table
+    }
 
-    try:
-
-        excel_result = make_excel(download_tables)
-
-        st.download_button(
-            label="⬇️ Download Hasil Lengkap (Excel)",
-            data=excel_result,
-            file_name="hasil_analisis_moa.xlsx",
-            mime=(
-                "application/vnd.openxmlformats-officedocument."
-                "spreadsheetml.sheet"
-            )
+    if "correlation_matrix" in locals():
+        excel_tables["Korelasi"] = (
+            correlation_matrix
+            .rename_axis("Variabel")
+            .reset_index()
         )
 
-    except Exception as e:
+    excel_data = make_excel(excel_tables)
 
-        st.error(
-            f"File Excel gagal dibuat: {e}"
-        )
+    st.download_button(
+        "Download Hasil Analisis (Excel)",
+        data=excel_data,
+        file_name="hasil_analisis_moa.xlsx",
+        mime=(
+            "application/vnd.openxmlformats-officedocument."
+            "spreadsheetml.sheet"
+        ),
+        key="statistics_download_excel"
+    )
 
+    st.divider()
 
-# ==================================================
-# 15. FOOTER
-# ==================================================
-
-st.divider()
-
-st.caption(
-    "💚 Calculator for MOAs | Turn Data Into Dream"
-)
-
-st.caption(
-    "Gunakan hasil analisis dengan mempertimbangkan "
-    "kualitas data, metode statistik, dan konteks penelitian."
-)
+    st.caption(
+        "💚 Calculator for MOAs — Turn Data Into Dream"
+    )
